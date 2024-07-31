@@ -1,6 +1,7 @@
 import numpy as np
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.neighbors import NearestNeighbors
+import random
+from PIL import Image
 
 # Load MNIST dataset
 def load_mnist(images_path, labels_path):
@@ -18,8 +19,6 @@ test_images, test_labels = load_mnist('t10k-images.idx3-ubyte', 't10k-labels.idx
 # Normalize the images
 train_images = train_images / 255.0
 test_images = test_images / 255.0
-import numpy as np
-import random
 
 def create_triplets_batch(images, labels, batch_size):
     triplets = []
@@ -39,8 +38,6 @@ def create_triplets_batch(images, labels, batch_size):
         triplets.append((anchor_img, positive_img, negative_img))
     return np.array(triplets)
 
-batch_size = 128
-triplets_batch = create_triplets_batch(train_images, train_labels, batch_size)
 def initialize_parameters(layer_dims):
     np.random.seed(1)
     parameters = {}
@@ -54,6 +51,9 @@ def initialize_parameters(layer_dims):
 
 def relu(Z):
     return np.maximum(0, Z)
+
+def relu_derivative(Z):
+    return Z > 0
 
 def forward_propagation(X, parameters):
     cache = {}
@@ -69,27 +69,128 @@ def forward_propagation(X, parameters):
 
     return A.T, cache
 
-# Example model configuration
-layer_dims = [784, 128, 64, 32]
-parameters = initialize_parameters(layer_dims)
-A, cache = forward_propagation(triplets_batch[:, 0], parameters)
 def compute_triplet_loss(A, P, N, alpha=0.2):
     pos_dist = np.sum(np.square(A - P), axis=1)
     neg_dist = np.sum(np.square(A - N), axis=1)
     loss = np.maximum(0, pos_dist - neg_dist + alpha)
     return np.mean(loss)
-learning_rate = 0.01
-num_epochs = 1000
 
-for epoch in range(num_epochs):
-    triplets_batch = create_triplets_batch(train_images, train_labels, batch_size)
-    A_anchor, _ = forward_propagation(triplets_batch[:, 0], parameters)
-    A_positive, _ = forward_propagation(triplets_batch[:, 1], parameters)
-    A_negative, _ = forward_propagation(triplets_batch[:, 2], parameters)
+def backward_propagation(X, A, P, N, parameters, cache, alpha=0.2):
+    grads = {}
+    L = len(parameters) // 2
 
-    loss = compute_triplet_loss(A_anchor, A_positive, A_negative)
+    m = X.shape[0]
+    pos_dist = A - P
+    neg_dist = A - N
+    dloss_dA = 2 * (pos_dist - neg_dist) / m
+
+    for l in reversed(range(1, L + 1)):
+        dZ = dloss_dA * relu_derivative(cache['Z' + str(l)].T)
+        A_prev = cache['A' + str(l-1)].T if l > 1 else X
+
+        grads['dW' + str(l)] = np.dot(dZ.T, A_prev) / m
+        grads['db' + str(l)] = np.sum(dZ, axis=0, keepdims=True).T / m
+
+        if l > 1:
+            dloss_dA = np.dot(dZ, parameters['W' + str(l)])
     
-    # Backpropagation and parameter updates would go here
+    return grads
+
+def initialize_adam_parameters(parameters):
+    L = len(parameters) // 2
+    v = {}
+    s = {}
+    for l in range(1, L + 1):
+        v['dW' + str(l)] = np.zeros_like(parameters['W' + str(l)])
+        v['db' + str(l)] = np.zeros_like(parameters['b' + str(l)])
+        s['dW' + str(l)] = np.zeros_like(parameters['W' + str(l)])
+        s['db' + str(l)] = np.zeros_like(parameters['b' + str(l)])
+    return v, s
+
+def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
+    L = len(parameters) // 2
+    v_corrected = {}
+    s_corrected = {}
+
+    for l in range(1, L + 1):
+        v['dW' + str(l)] = beta1 * v['dW' + str(l)] + (1 - beta1) * grads['dW' + str(l)]
+        v['db' + str(l)] = beta1 * v['db' + str(l)] + (1 - beta1) * grads['db' + str(l)]
+
+        s['dW' + str(l)] = beta2 * s['dW' + str(l)] + (1 - beta2) * np.square(grads['dW' + str(l)])
+        s['db' + str(l)] = beta2 * s['db' + str(l)] + (1 - beta2) * np.square(grads['db' + str(l)])
+
+        v_corrected['dW' + str(l)] = v['dW' + str(l)] / (1 - beta1 ** t)
+        v_corrected['db' + str(l)] = v['db' + str(l)] / (1 - beta1 ** t)
+
+        s_corrected['dW' + str(l)] = s['dW' + str(l)] / (1 - beta2 ** t)
+        s_corrected['db' + str(l)] = s['db' + str(l)] / (1 - beta2 ** t)
+
+        parameters['W' + str(l)] -= learning_rate * v_corrected['dW' + str(l)] / (np.sqrt(s_corrected['dW' + str(l)]) + epsilon)
+        parameters['b' + str(l)] -= learning_rate * v_corrected['db' + str(l)] / (np.sqrt(s_corrected['db' + str(l)]) + epsilon)
+
+    return parameters, v, s
+
+def optimize(parameters, learning_rate=0.01, num_epochs=1000, beta1=0.9, beta2=0.999, epsilon=1e-8, batch_size=128):
+    v, s = initialize_adam_parameters(parameters)
+    for epoch in range(num_epochs):
+        triplets_batch = create_triplets_batch(train_images, train_labels, batch_size)
+        A_anchor, cache_anchor = forward_propagation(triplets_batch[:, 0], parameters)
+        A_positive, cache_positive = forward_propagation(triplets_batch[:, 1], parameters)
+        A_negative, cache_negative = forward_propagation(triplets_batch[:, 2], parameters)
+
+        loss = compute_triplet_loss(A_anchor, A_positive, A_negative, alpha=0.2)
+
+        grads_anchor = backward_propagation(triplets_batch[:, 0], A_anchor, A_positive, A_negative, parameters, cache_anchor, alpha=0.2)
+        
+        t = epoch + 1
+        parameters, v, s = update_parameters_with_adam(parameters, grads_anchor, v, s, t, learning_rate, beta1, beta2, epsilon)
+        
+        if epoch % 5 == 0:
+            print(f'Epoch {epoch}, Loss: {loss}')
+
+    return parameters
+
+def preprocess_image(image_path):
+    img = Image.open(image_path).convert('L')
+    img = img.resize((28, 28), resample=Image.Resampling.LANCZOS)
+    img = np.array(img).astype(np.float32)
+    img = img.flatten() / 255.0
+    return img
+
+def compute_embeddings(images, parameters):
+    embeddings = []
+    for image in images:
+        embedding, _ = forward_propagation(np.array([image]), parameters)
+        embeddings.append(embedding.flatten())
+    return np.array(embeddings)
+
+def predict_class(image, train_embeddings, train_labels, parameters):
+    image_embedding, _ = forward_propagation(np.array([image]), parameters)
+    image_embedding = image_embedding.flatten()
+
+    # Use Nearest Neighbors to find the closest embedding
+    nbrs = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(train_embeddings)
+    distances, indices = nbrs.kneighbors([image_embedding])
     
-    if epoch % 100 == 0:
-        print(f'Epoch {epoch}, Loss: {loss}')
+    # Get the label of the closest embedding
+    predicted_label = train_labels[indices[0][0]]
+    
+    return predicted_label
+
+# Example model configuration
+layer_dims = [784, 128, 64, 32]
+parameters = initialize_parameters(layer_dims)
+
+# Optimize the model
+parameters = optimize(parameters, learning_rate=0.01, num_epochs=100, batch_size=128)
+
+# Prepare test image
+test_image = preprocess_image('4.png')
+
+# Compute embeddings for the training data
+train_embeddings = compute_embeddings(train_images, parameters)
+
+# Predict the label for the test image
+predicted_label = predict_class(test_image, train_embeddings, train_labels, parameters)
+
+print(f'Predicted label: {predicted_label}')

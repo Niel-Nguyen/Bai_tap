@@ -52,9 +52,6 @@ def initialize_parameters(layer_dims):
 def relu(Z):
     return np.maximum(0, Z)
 
-def relu_derivative(Z):
-    return Z > 0
-
 def forward_propagation(X, parameters):
     cache = {}
     A = X.T
@@ -75,7 +72,7 @@ def compute_triplet_loss(A, P, N, alpha=0.2):
     loss = np.maximum(0, pos_dist - neg_dist + alpha)
     return np.mean(loss)
 
-def backward_propagation(X, A, P, N, parameters, cache, alpha=0.2):
+def backward_propagation(X, A, P, N, parameters, cache, alpha):
     grads = {}
     L = len(parameters) // 2
 
@@ -85,7 +82,7 @@ def backward_propagation(X, A, P, N, parameters, cache, alpha=0.2):
     dloss_dA = 2 * (pos_dist - neg_dist) / m
 
     for l in reversed(range(1, L + 1)):
-        dZ = dloss_dA * relu_derivative(cache['Z' + str(l)].T)
+        dZ = dloss_dA * relu(cache['Z' + str(l)].T)
         A_prev = cache['A' + str(l-1)].T if l > 1 else X
 
         grads['dW' + str(l)] = np.dot(dZ.T, A_prev) / m
@@ -96,59 +93,39 @@ def backward_propagation(X, A, P, N, parameters, cache, alpha=0.2):
     
     return grads
 
-def initialize_adam_parameters(parameters):
+def update_parameters(parameters, grads, learning_rate):
     L = len(parameters) // 2
-    v = {}
-    s = {}
-    for l in range(1, L + 1):
-        v['dW' + str(l)] = np.zeros_like(parameters['W' + str(l)])
-        v['db' + str(l)] = np.zeros_like(parameters['b' + str(l)])
-        s['dW' + str(l)] = np.zeros_like(parameters['W' + str(l)])
-        s['db' + str(l)] = np.zeros_like(parameters['b' + str(l)])
-    return v, s
-
-def update_parameters_with_adam(parameters, grads, v, s, t, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8):
-    L = len(parameters) // 2
-    v_corrected = {}
-    s_corrected = {}
 
     for l in range(1, L + 1):
-        v['dW' + str(l)] = beta1 * v['dW' + str(l)] + (1 - beta1) * grads['dW' + str(l)]
-        v['db' + str(l)] = beta1 * v['db' + str(l)] + (1 - beta1) * grads['db' + str(l)]
-
-        s['dW' + str(l)] = beta2 * s['dW' + str(l)] + (1 - beta2) * np.square(grads['dW' + str(l)])
-        s['db' + str(l)] = beta2 * s['db' + str(l)] + (1 - beta2) * np.square(grads['db' + str(l)])
-
-        v_corrected['dW' + str(l)] = v['dW' + str(l)] / (1 - beta1 ** t)
-        v_corrected['db' + str(l)] = v['db' + str(l)] / (1 - beta1 ** t)
-
-        s_corrected['dW' + str(l)] = s['dW' + str(l)] / (1 - beta2 ** t)
-        s_corrected['db' + str(l)] = s['db' + str(l)] / (1 - beta2 ** t)
-
-        parameters['W' + str(l)] -= learning_rate * v_corrected['dW' + str(l)] / (np.sqrt(s_corrected['dW' + str(l)]) + epsilon)
-        parameters['b' + str(l)] -= learning_rate * v_corrected['db' + str(l)] / (np.sqrt(s_corrected['db' + str(l)]) + epsilon)
-
-    return parameters, v, s
-
-def optimize(parameters, learning_rate=0.01, num_epochs=1000, beta1=0.9, beta2=0.999, epsilon=1e-8, batch_size=128):
-    v, s = initialize_adam_parameters(parameters)
-    for epoch in range(num_epochs):
-        triplets_batch = create_triplets_batch(train_images, train_labels, batch_size)
-        A_anchor, cache_anchor = forward_propagation(triplets_batch[:, 0], parameters)
-        A_positive, cache_positive = forward_propagation(triplets_batch[:, 1], parameters)
-        A_negative, cache_negative = forward_propagation(triplets_batch[:, 2], parameters)
-
-        loss = compute_triplet_loss(A_anchor, A_positive, A_negative, alpha=0.2)
-
-        grads_anchor = backward_propagation(triplets_batch[:, 0], A_anchor, A_positive, A_negative, parameters, cache_anchor, alpha=0.2)
-        
-        t = epoch + 1
-        parameters, v, s = update_parameters_with_adam(parameters, grads_anchor, v, s, t, learning_rate, beta1, beta2, epsilon)
-        
-        if epoch % 5 == 0:
-            print(f'Epoch {epoch}, Loss: {loss}')
-
+        parameters['W' + str(l)] -= learning_rate * grads['dW' + str(l)]
+        parameters['b' + str(l)] -= learning_rate * grads['db' + str(l)]
+    
     return parameters
+
+# Example model configuration
+layer_dims = [784, 128, 64, 10]
+parameters = initialize_parameters(layer_dims)
+
+# Training loop
+learning_rate = 0.01
+num_epochs = 100
+alpha = 0.2
+batch_size = 128
+
+for epoch in range(num_epochs):
+    triplets_batch = create_triplets_batch(train_images, train_labels, batch_size)
+    A_anchor, cache_anchor = forward_propagation(triplets_batch[:, 0], parameters)
+    A_positive, cache_positive = forward_propagation(triplets_batch[:, 1], parameters)
+    A_negative, cache_negative = forward_propagation(triplets_batch[:, 2], parameters)
+
+    loss = compute_triplet_loss(A_anchor, A_positive, A_negative, alpha)
+    
+    grads_anchor = backward_propagation(triplets_batch[:, 0], A_anchor, A_positive, A_negative, parameters, cache_anchor, alpha)
+    
+    parameters = update_parameters(parameters, grads_anchor, learning_rate)
+    
+    if epoch % 5 == 0:
+        print(f'Epoch {epoch}, Loss: {loss}')
 
 def preprocess_image(image_path):
     img = Image.open(image_path).convert('L')
@@ -177,20 +154,13 @@ def predict_class(image, train_embeddings, train_labels, parameters):
     
     return predicted_label
 
-# Example model configuration
-layer_dims = [784, 128, 64, 32]
-parameters = initialize_parameters(layer_dims)
-
-# Optimize the model
-parameters = optimize(parameters, learning_rate=0.01, num_epochs=100, batch_size=128)
-
-# Prepare test image
-test_image = preprocess_image('4.png')
-
-# Compute embeddings for the training data
+# Compute embeddings for the training images
 train_embeddings = compute_embeddings(train_images, parameters)
 
-# Predict the label for the test image
+# Preprocess the external image
+test_image = preprocess_image('7.png')
+
+# Predict the class of the external image
 predicted_label = predict_class(test_image, train_embeddings, train_labels, parameters)
 
-print(f'Predicted label: {predicted_label}')
+print(f'Predicted label for the test image: {predicted_label}')

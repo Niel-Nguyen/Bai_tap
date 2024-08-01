@@ -45,7 +45,7 @@ def preprocess_image(image_path):
     return image_array, image
 
 # Path to your custom image
-custom_image_path = 'image.png'
+custom_image_path = '7.png'
 
 # Preprocess your custom image
 custom_image, original_image = preprocess_image(custom_image_path)

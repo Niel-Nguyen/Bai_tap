@@ -6,7 +6,7 @@ Dùng thuật toán KNN cho bài toán phân loại với data Mnist.
 
 |Data|Image|Label|
 |----|----|----|
-|Train|50000|50000|
+|Train|60000|60000|
 |Test|10000|10000|
 
 Test ảnh bên ngoài:
